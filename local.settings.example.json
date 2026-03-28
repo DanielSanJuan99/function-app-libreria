@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "java",
+    "ORACLE_USER": "<REEMPLAZAR_USUARIO_ORACLE>",
+    "ORACLE_ADMIN_PASSWORD": "<REEMPLAZAR_PASSWORD_ADMIN_ORACLE>",
+    "ORACLE_TNS_ALIAS": "<REEMPLAZAR_TNS_ALIAS>",
+    "ORACLE_WALLET_PATH": "<REEMPLAZAR_RUTA_WALLET>"
+  }
+}
