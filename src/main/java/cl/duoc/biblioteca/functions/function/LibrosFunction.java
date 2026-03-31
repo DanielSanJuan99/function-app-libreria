@@ -220,7 +220,7 @@ public class LibrosFunction {
 
     private String extractId(HttpRequestMessage<Optional<String>> request, String routeBase) {
         String path = request.getUri().getPath();
-        String marker = "/api/" + routeBase;
+        String marker = "/" + routeBase;
 
         int idx = path.indexOf(marker);
         if (idx < 0) {
