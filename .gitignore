@@ -2,10 +2,22 @@ InspectAutorTmp.class
 
 .vscode
 
-target
+target/
 
 local.settings.json
 
 .DS_Store
 
 Wallet_BDLIBRERIACN2/
+
+Wallet_BDLIBRERIACN2.zip
+
+.env
+
+.classpath
+
+.project
+
+*.jar
+
+*.log
