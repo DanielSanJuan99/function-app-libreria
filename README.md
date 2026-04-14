@@ -1,11 +1,15 @@
 # function-app-libreria
 
-Function App Java para gestión de biblioteca, con 4 funciones HTTP:
+Function App Java para gestión de biblioteca, con 8 funciones HTTP/GraphQL:
 
 - `usuarios`
 - `libros`
 - `autores`
 - `prestamos`
+- `resumen/catalogo`
+- `resumen/general`
+- `graphql/catalogo`
+- `graphql/general`
 
 El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando wallet y variables de entorno.
 
@@ -14,6 +18,8 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 ## ¿Qué incluye este proyecto?
 
 - Azure Functions HTTP en Java 21.
+- Consultas REST de resumen para catálogo y estado general.
+- Endpoints GraphQL formales con `graphql-java`.
 - Persistencia Oracle con repositorios separados por entidad.
 - Refactor de `OracleStore` como fachada para mantener compatibilidad.
 - Documentación JavaDoc en métodos clave.
@@ -24,7 +30,9 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 ## Arquitectura rápida
 
 - `src/main/java/cl/duoc/biblioteca/functions/function/`
-	- handlers HTTP (`UsuariosFunction`, `LibrosFunction`, `AutoresFunction`, `PrestamosFunction`).
+	- handlers HTTP (`UsuariosFunction`, `LibrosFunction`, `AutoresFunction`, `PrestamosFunction`),
+	- handlers REST de resumen (`ResumenCatalogoFunction`, `ResumenGeneralFunction`),
+	- handlers GraphQL (`CatalogoGraphqlFunction`, `ResumenGeneralGraphqlFunction`).
 - `src/main/java/cl/duoc/biblioteca/functions/repository/`
 	- acceso a datos (`UsuarioRepository`, `LibroRepository`, `AutorRepository`, `PrestamoRepository`),
 	- infraestructura Oracle (`OracleInfra`),
@@ -38,7 +46,7 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 ## Function App en Azure
 
 - **Nombre de Function App de despliegue:** `functionsbiblioteca`
-- **Funciones desplegadas:** `usuarios`, `libros`, `autores`, `prestamos`
+- **Funciones desplegadas:** `usuarios`, `libros`, `autores`, `prestamos`, `resumen/catalogo`, `resumen/general`, `graphql/catalogo`, `graphql/general`
 
 > Nota: En `pom.xml` existe `functionAppName=biblioteca-function-app` para el empaquetado local.
 > Si vas a desplegar con `mvn azure-functions:deploy`, ajusta ese nombre al recurso real (`functionsbiblioteca`) o despliega desde la extensión de VS Code seleccionando el recurso correcto.
@@ -262,4 +270,20 @@ curl -X POST http://localhost:7071/api/libros \
 curl -X POST http://localhost:7071/api/prestamos \
 	-H "Content-Type: application/json" \
 	-d '{"idUsuario":"1","idLibro":"1","estado":"PRESTADO"}'
+
+# Resumen catálogo
+curl -X GET http://localhost:7071/api/resumen/catalogo
+
+# Resumen general
+curl -X GET http://localhost:7071/api/resumen/general
+
+# GraphQL catálogo
+curl -X POST http://localhost:7071/api/graphql/catalogo \
+	-H "Content-Type: application/json" \
+	-d '{"query":"query { libros { id titulo } }"}'
+
+# GraphQL general
+curl -X POST http://localhost:7071/api/graphql/general \
+	-H "Content-Type: application/json" \
+	-d '{"query":"query { usuarios { id nombre } }"}'
 ```
