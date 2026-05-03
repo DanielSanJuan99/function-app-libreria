@@ -4,6 +4,7 @@ import java.util.List;
 
 import cl.duoc.biblioteca.functions.domain.Autor;
 import cl.duoc.biblioteca.functions.domain.Libro;
+import cl.duoc.biblioteca.functions.domain.Notificacion;
 import cl.duoc.biblioteca.functions.domain.Prestamo;
 import cl.duoc.biblioteca.functions.domain.Usuario;
 
@@ -293,5 +294,31 @@ public final class OracleStore {
      */
     public static boolean existsPrestamoByUsuarioLibro(String idUsuario, String idLibro) {
         return PrestamoRepository.existsPrestamoByUsuarioLibro(idUsuario, idLibro);
+    }
+
+    /**
+     * Guarda una notificación generada por el consumer de Event Grid.
+     * @param notificacion datos de la notificación
+    * @return {@link Notificacion} notificación persistida
+     */
+    public static Notificacion saveNotificacion(Notificacion notificacion) {
+        return NotificacionRepository.saveNotificacion(notificacion);
+    }
+
+    /**
+     * Lista todas las notificaciones registradas.
+    * @return {@link List<Notificacion>} listado completo
+     */
+    public static List<Notificacion> getNotificaciones() {
+        return NotificacionRepository.getNotificaciones();
+    }
+
+    /**
+     * Lista las notificaciones asociadas a un usuario.
+     * @param idUsuario identificador del usuario
+    * @return {@link List<Notificacion>} notificaciones del usuario
+     */
+    public static List<Notificacion> getNotificacionesByUsuario(String idUsuario) {
+        return NotificacionRepository.getNotificacionesByUsuario(idUsuario);
     }
 }

@@ -14,7 +14,7 @@
         <java.version>21</java.version>
         <azure.functions.java.library.version>3.1.0</azure.functions.java.library.version>
         <azure.functions.maven.plugin.version>1.26.0</azure.functions.maven.plugin.version>
-        <functionAppName>biblioteca-function-app</functionAppName>
+        <functionAppName>functionsbiblioteca</functionAppName>
     </properties>
 
     <dependencies>
@@ -47,6 +47,11 @@
             <groupId>com.graphql-java</groupId>
             <artifactId>graphql-java</artifactId>
             <version>22.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-messaging-eventgrid</artifactId>
+            <version>4.22.2</version>
         </dependency>
     </dependencies>
 
@@ -93,10 +98,10 @@
                 <version>${azure.functions.maven.plugin.version}</version>
                 <configuration>
                     <appName>${functionAppName}</appName>
-                    <resourceGroup>rg-biblioteca-serverless</resourceGroup>
-                    <region>westus</region>
+                    <resourceGroup>rg_functions_bliblioteca</resourceGroup>
+                    <region>eastus</region>
                     <runtime>
-                        <os>linux</os>
+                        <os>windows</os>
                         <javaVersion>21</javaVersion>
                     </runtime>
                     <appSettings>
