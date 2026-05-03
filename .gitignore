@@ -21,3 +21,7 @@ Wallet_BDLIBRERIACN2.zip
 *.jar
 
 *.log
+
+.settings
+
+.github
