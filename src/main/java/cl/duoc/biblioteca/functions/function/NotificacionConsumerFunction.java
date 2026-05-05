@@ -20,7 +20,7 @@ public class NotificacionConsumerFunction {
 
     private static final String EVENT_PRESTAMO_CREADO = "Prestamo.Creado";
     private static final String EVENT_PRESTAMO_DEVUELTO = "Prestamo.Devuelto";
-    private static final String EVENT_USUARIO_INACTIVO = "Usuario.Inactivado";
+    private static final String EVENT_USUARIO_INACTIVO = "Usuario.Inactivo";
 
     @FunctionName("notificacionConsumer")
     public void run(
@@ -52,7 +52,7 @@ public class NotificacionConsumerFunction {
         Notificacion notificacion = switch (eventType) {
             case EVENT_PRESTAMO_CREADO -> buildNotificacionPrestamoCreado(data);
             case EVENT_PRESTAMO_DEVUELTO -> buildNotificacionPrestamoDevuelto(data);
-            case EVENT_USUARIO_INACTIVO -> buildNotificacionUsuarioInactivado(data);
+            case EVENT_USUARIO_INACTIVO -> buildNotificacionUsuarioInactivo(data);
             default -> null;
         };
 
@@ -110,7 +110,7 @@ public class NotificacionConsumerFunction {
         return new Notificacion(null, idUsuario, "PRESTAMO_DEVUELTO", asunto, cuerpo, "PENDIENTE", null, null);
     }
 
-    private Notificacion buildNotificacionUsuarioInactivado(Map<String, Object> data) {
+    private Notificacion buildNotificacionUsuarioInactivo(Map<String, Object> data) {
         String idUsuario = stringOrNull(data.get("id"));
         Object prestamosActivos = data.get("prestamosActivos");
 

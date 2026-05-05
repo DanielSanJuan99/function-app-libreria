@@ -1,6 +1,6 @@
 # function-app-libreria
 
-Function App Java para gestión de biblioteca, con 8 funciones HTTP/GraphQL:
+Function App Java para gestión de biblioteca, con 10 funciones HTTP / GraphQL / Event Grid:
 
 - `usuarios`
 - `libros`
@@ -10,6 +10,8 @@ Function App Java para gestión de biblioteca, con 8 funciones HTTP/GraphQL:
 - `resumen/general`
 - `graphql/catalogo`
 - `graphql/general`
+- `notificacionConsumer` *(Event Grid Trigger)*
+- `notificaciones`
 
 El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando wallet y variables de entorno.
 
@@ -20,6 +22,8 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 - Azure Functions HTTP en Java 21.
 - Consultas REST de resumen para catálogo y estado general.
 - Endpoints GraphQL formales con `graphql-java`.
+- **Consumer Event Grid (`@EventGridTrigger`) que materializa notificaciones de dominio.**
+- **Endpoint REST de consulta de notificaciones (lista global y por usuario).**
 - Persistencia Oracle con repositorios separados por entidad.
 - Refactor de `OracleStore` como fachada para mantener compatibilidad.
 - Documentación JavaDoc en métodos clave.
@@ -32,9 +36,13 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 - `src/main/java/cl/duoc/biblioteca/functions/function/`
 	- handlers HTTP (`UsuariosFunction`, `LibrosFunction`, `AutoresFunction`, `PrestamosFunction`),
 	- handlers REST de resumen (`ResumenCatalogoFunction`, `ResumenGeneralFunction`),
-	- handlers GraphQL (`CatalogoGraphqlFunction`, `ResumenGeneralGraphqlFunction`).
+	- handlers GraphQL (`CatalogoGraphqlFunction`, `ResumenGeneralGraphqlFunction`),
+	- consumer Event Grid (`NotificacionConsumerFunction`),
+	- handler HTTP de consulta de notificaciones (`NotificacionesFunction`).
+- `src/main/java/cl/duoc/biblioteca/functions/domain/`
+	- entidades de dominio (`Notificacion`, ...).
 - `src/main/java/cl/duoc/biblioteca/functions/repository/`
-	- acceso a datos (`UsuarioRepository`, `LibroRepository`, `AutorRepository`, `PrestamoRepository`),
+	- acceso a datos (`UsuarioRepository`, `LibroRepository`, `AutorRepository`, `PrestamoRepository`, `NotificacionRepository`),
 	- infraestructura Oracle (`OracleInfra`),
 	- utilidades (`RepositoryUtils`),
 	- fachada (`OracleStore`).
@@ -46,7 +54,9 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 ## Function App en Azure
 
 - **Nombre de Function App de despliegue:** `functionsbiblioteca`
-- **Funciones desplegadas:** `usuarios`, `libros`, `autores`, `prestamos`, `resumen/catalogo`, `resumen/general`, `graphql/catalogo`, `graphql/general`
+- **Funciones desplegadas:** `usuarios`, `libros`, `autores`, `prestamos`, `resumen/catalogo`, `resumen/general`, `graphql/catalogo`, `graphql/general`, `notificacionConsumer` *(EventGrid)*, `notificaciones`
+- **Topic Event Grid asociado al consumer:** `biblioteca-topics`
+- **Event Subscription:** apunta al recurso `functionsbiblioteca` → función `notificacionConsumer`
 
 > Nota: En `pom.xml` existe `functionAppName=biblioteca-function-app` para el empaquetado local.
 > Si vas a desplegar con `mvn azure-functions:deploy`, ajusta ese nombre al recurso real (`functionsbiblioteca`) o despliega desde la extensión de VS Code seleccionando el recurso correcto.
@@ -248,6 +258,77 @@ Ejemplo `POST`:
 }
 ```
 
+## 5) `notificacionConsumer` *(Event Grid Trigger)*
+
+Función con `@EventGridTrigger` que **consume** los eventos de dominio publicados al **Event Grid Topic** `biblioteca-topics` y persiste un registro en la tabla `NOTIFICACIONES` por cada uno.
+
+- **No es invocable por HTTP.** Se gatilla automáticamente por la Event Subscription configurada en Azure Portal.
+- **Eventos que procesa (switch por `eventType`):**
+	- `Prestamo.Creado`
+	- `Prestamo.Devuelto`
+	- `Usuario.Inactivo`
+- **Salida:** un `Notificacion` con `tipo`, `asunto`, `cuerpo`, `estado=PENDIENTE`, `fechaCreacion=now`, `fechaEnvio=null`.
+
+Para verificar el flujo manualmente, basta con publicar un evento desde el publisher (`event-rounting-libreria/eventPublisher`) o desde el BFF (que ya orquesta la publicación).
+
+## 6) `notificaciones`
+
+Endpoint HTTP que expone las notificaciones generadas por el consumer.
+
+- `GET /notificaciones` → lista todas las notificaciones (más recientes primero).
+- `GET /notificaciones/{idUsuario}` → notificaciones de un usuario específico.
+
+Respuesta de ejemplo:
+
+```json
+[
+	{
+		"id": "12",
+		"idUsuario": "1",
+		"tipo": "PRESTAMO_CREADO",
+		"asunto": "Préstamo registrado",
+		"cuerpo": "Tu préstamo del libro 5 ha sido registrado.",
+		"estado": "PENDIENTE",
+		"fechaCreacion": "2026-05-03T10:30:00Z",
+		"fechaEnvio": null
+	}
+]
+```
+
+> El campo `fechaEnvio` se mantiene `null` en este alcance — queda reservado para una futura etapa de despacho real (mailer/SMS) que marque la notificación como enviada.
+
+---
+
+## Flujo event-driven (Notificaciones)
+
+```
+[BFF / cliente HTTP]
+		↓ POST con {eventType, subject, data}
+[event-rounting-libreria → eventPublisher]
+		↓ sendEvent()
+[Event Grid Topic: biblioteca-topics]
+		↓ entrega async
+[Event Subscription → notificacionConsumer]
+		↓ NotificacionRepository.saveNotificacion()
+[Tabla NOTIFICACIONES en Oracle ATP]
+		↑ consultable vía
+[GET /api/notificaciones]
+```
+
+### Pre-requisito SQL
+
+Antes de procesar eventos, debe existir la tabla `NOTIFICACIONES` en Oracle ATP. El DDL está en `db/notificaciones.sql`.
+
+### Configuración del consumer en Azure
+
+`notificacionConsumer` no requiere variables de entorno adicionales: el binding `@EventGridTrigger` se conecta automáticamente a la Event Subscription configurada en el portal.
+
+Pasos para crear la Event Subscription (una sola vez):
+1. Azure Portal → Event Grid Topic `biblioteca-topics` → **+ Event Subscription**
+2. **Endpoint Type:** Azure Function
+3. **Endpoint:** Subscription → `rg_functions_bliblioteca` → Function App `functionsbiblioteca` → función `notificacionConsumer`
+4. (Opcional) Filtrar por **Event Types**: `Prestamo.Creado`, `Prestamo.Devuelto`, `Usuario.Inactivo`
+
 ---
 
 ## Ejemplos rápidos con cURL
@@ -286,4 +367,12 @@ curl -X POST http://localhost:7071/api/graphql/catalogo \
 curl -X POST http://localhost:7071/api/graphql/general \
 	-H "Content-Type: application/json" \
 	-d '{"query":"query { usuarios { id nombre } }"}'
+
+# Listar notificaciones (todas)
+curl -X GET http://localhost:7071/api/notificaciones
+
+# Listar notificaciones de un usuario específico
+curl -X GET http://localhost:7071/api/notificaciones/1
 ```
+
+> El consumer `notificacionConsumer` no se prueba con cURL: se gatilla cuando llega un evento al Topic. Para forzar uno, publicar desde `event-rounting-libreria/eventPublisher` y luego consultar `/api/notificaciones`.
