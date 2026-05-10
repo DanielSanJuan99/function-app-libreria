@@ -20,7 +20,7 @@ public class NotificacionConsumerFunction {
 
     private static final String EVENT_PRESTAMO_CREADO = "Prestamo.Creado";
     private static final String EVENT_PRESTAMO_DEVUELTO = "Prestamo.Devuelto";
-    private static final String EVENT_USUARIO_INACTIVO = "Usuario.Inactivo";
+    private static final String EVENT_USUARIO_ELIMINACION = "Usuario.EliminacionSolicitada";
 
     @FunctionName("notificacionConsumer")
     public void run(
@@ -52,7 +52,7 @@ public class NotificacionConsumerFunction {
         Notificacion notificacion = switch (eventType) {
             case EVENT_PRESTAMO_CREADO -> buildNotificacionPrestamoCreado(data);
             case EVENT_PRESTAMO_DEVUELTO -> buildNotificacionPrestamoDevuelto(data);
-            case EVENT_USUARIO_INACTIVO -> buildNotificacionUsuarioInactivo(data);
+            case EVENT_USUARIO_ELIMINACION -> buildNotificacionUsuarioEliminacionSolicitada(data);
             default -> null;
         };
 
@@ -110,18 +110,22 @@ public class NotificacionConsumerFunction {
         return new Notificacion(null, idUsuario, "PRESTAMO_DEVUELTO", asunto, cuerpo, "PENDIENTE", null, null);
     }
 
-    private Notificacion buildNotificacionUsuarioInactivo(Map<String, Object> data) {
-        String idUsuario = stringOrNull(data.get("id"));
-        Object prestamosActivos = data.get("prestamosActivos");
+    private Notificacion buildNotificacionUsuarioEliminacionSolicitada(Map<String, Object> data) {
+        String idUsuario = stringOrNull(data.get("idUsuario"));
+        if (idUsuario == null) {
+            idUsuario = stringOrNull(data.get("id"));
+        }
+        Object totalPrestamos = data.get("totalPrestamos");
 
-        String asunto = "Usuario inactivo con préstamos pendientes";
+        String asunto = "Solicitud de baja de usuario recibida";
         String cuerpo = String.format(
-                "Aviso al administrador: el usuario %s fue marcado como inactivo " +
-                "y mantiene %s préstamo(s) pendiente(s) de devolución.",
+                "Aviso al administrador: se recibio solicitud de baja para el usuario %s. " +
+                "Prestamos asociados: %s. La cascada (devolucion de copias al inventario y " +
+                "eliminacion de prestamos) sera ejecutada por el consumer de negocio.",
                 idUsuario == null ? "(sin id)" : idUsuario,
-                prestamosActivos == null ? "?" : prestamosActivos.toString());
+                totalPrestamos == null ? "?" : totalPrestamos.toString());
 
-        return new Notificacion(null, idUsuario, "USUARIO_INACTIVO", asunto, cuerpo, "PENDIENTE", null, null);
+        return new Notificacion(null, idUsuario, "USUARIO_ELIMINACION_SOLICITADA", asunto, cuerpo, "PENDIENTE", null, null);
     }
 
     private String stringOrNull(Object value) {
