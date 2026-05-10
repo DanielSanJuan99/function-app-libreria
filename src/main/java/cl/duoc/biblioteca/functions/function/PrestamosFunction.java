@@ -1,9 +1,12 @@
 package cl.duoc.biblioteca.functions.function;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Level;
 
+import com.azure.messaging.eventgrid.EventGridEvent;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.azure.functions.ExecutionContext;
 import com.microsoft.azure.functions.HttpMethod;
@@ -11,6 +14,7 @@ import com.microsoft.azure.functions.HttpRequestMessage;
 import com.microsoft.azure.functions.HttpResponseMessage;
 import com.microsoft.azure.functions.HttpStatus;
 import com.microsoft.azure.functions.annotation.AuthorizationLevel;
+import com.microsoft.azure.functions.annotation.EventGridTrigger;
 import com.microsoft.azure.functions.annotation.FunctionName;
 import com.microsoft.azure.functions.annotation.HttpTrigger;
 
@@ -102,6 +106,12 @@ public class PrestamosFunction {
                 .build();
         }
 
+        if (!OracleStore.hayCopiasDisponibles(prestamo.getIdLibro())) {
+            return request.createResponseBuilder(HttpStatus.CONFLICT)
+                .body(Map.of("error", "No hay copias disponibles del libro", "idLibro", prestamo.getIdLibro()))
+                .build();
+        }
+
         Prestamo creado = OracleStore.savePrestamo(prestamo);
         return request.createResponseBuilder(HttpStatus.CREATED)
                 .body(creado)
@@ -150,7 +160,7 @@ public class PrestamosFunction {
 
         Prestamo actualizado = OracleStore.updatePrestamo(id, prestamo);
         
-        // Limpieza automática: si el préstamo se marcó como devuelto (estado=2) y el usuario está inactivo sin préstamos, eliminarlo
+        // si el préstamo se marcó como devuelto (estado=2) y el usuario está inactivo sin préstamos, se elimina
         if ("DEVUELTO".equalsIgnoreCase(prestamo.getEstado())) {
             OracleStore.deleteUsuarioIfInactive(prestamo.getIdUsuario());
         }
@@ -203,5 +213,116 @@ public class PrestamosFunction {
         }
 
         return tail.isBlank() ? null : tail;
+    }
+
+    // =================================================================
+    // Consumer Event Grid: ajusta inventario de libros segun el ciclo
+    // de vida de los prestamos.
+    //   - Prestamo.Creado   -> COPIAS_DISPONIBLE -= 1
+    //   - Prestamo.Devuelto -> COPIAS_DISPONIBLE += 1
+    // Idempotente via EVENTO_PROCESADO.
+    // =================================================================
+
+    private static final String EVENT_PRESTAMO_CREADO = "Prestamo.Creado";
+    private static final String EVENT_PRESTAMO_DEVUELTO = "Prestamo.Devuelto";
+
+    @FunctionName("prestamosStockConsumer")
+    public void onPrestamoEvent(
+            @EventGridTrigger(name = "event") String content,
+            final ExecutionContext context) {
+
+        context.getLogger().info("[prestamosStockConsumer] Evento recibido: " + content);
+
+        try {
+            List<EventGridEvent> events = EventGridEvent.fromString(content);
+            if (events == null || events.isEmpty()) {
+                context.getLogger().warning("[prestamosStockConsumer] Payload sin eventos validos");
+                return;
+            }
+
+            for (EventGridEvent event : events) {
+                procesarEventoStock(event, context);
+            }
+        } catch (Exception ex) {
+            context.getLogger().log(Level.SEVERE, "[prestamosStockConsumer] Error procesando evento", ex);
+            throw new RuntimeException(ex);
+        }
+    }
+
+    private void procesarEventoStock(EventGridEvent event, ExecutionContext context) {
+        String eventType = event.getEventType();
+        String eventId = event.getId();
+
+        if (eventId != null && OracleStore.isEventoProcesado(eventId)) {
+            context.getLogger().info("[prestamosStockConsumer] Evento ya procesado: id=" + eventId);
+            return;
+        }
+
+        Map<String, Object> data = parseData(event);
+
+        switch (eventType) {
+            case EVENT_PRESTAMO_CREADO -> aplicarDecremento(data, eventId, context);
+            case EVENT_PRESTAMO_DEVUELTO -> aplicarIncremento(data, eventId, context);
+            default -> context.getLogger().info(
+                    "[prestamosStockConsumer] Evento ignorado (fuera de dominio): " + eventType);
+        }
+    }
+
+    private void aplicarDecremento(Map<String, Object> data, String eventId, ExecutionContext context) {
+        String idLibro = stringOrNull(data.get("idLibro"));
+        String idPrestamo = stringOrNull(data.get("id"));
+
+        if (idLibro == null) {
+            context.getLogger().warning("[prestamosStockConsumer] Prestamo.Creado sin idLibro");
+            return;
+        }
+
+        int filas = OracleStore.decrementarCopiasDisponibles(idLibro);
+        if (filas == 0) {
+            context.getLogger().warning(String.format(
+                    "[prestamosStockConsumer] Sin efecto: idLibro=%s (stock=0 o libro inexistente)", idLibro));
+        } else {
+            context.getLogger().info(String.format(
+                    "[prestamosStockConsumer] Stock -1 idPrestamo=%s idLibro=%s", idPrestamo, idLibro));
+        }
+
+        OracleStore.marcarEventoProcesado(eventId, EVENT_PRESTAMO_CREADO,
+                "idPrestamo=" + idPrestamo + " idLibro=" + idLibro + " filas=" + filas);
+    }
+
+    private void aplicarIncremento(Map<String, Object> data, String eventId, ExecutionContext context) {
+        String idLibro = stringOrNull(data.get("idLibro"));
+        String idPrestamo = stringOrNull(data.get("id"));
+
+        if (idLibro == null) {
+            context.getLogger().warning("[prestamosStockConsumer] Prestamo.Devuelto sin idLibro");
+            return;
+        }
+
+        int filas = OracleStore.incrementarCopiasDisponibles(idLibro);
+        context.getLogger().info(String.format(
+                "[prestamosStockConsumer] Stock +1 idPrestamo=%s idLibro=%s filas=%d",
+                idPrestamo, idLibro, filas));
+
+        OracleStore.marcarEventoProcesado(eventId, EVENT_PRESTAMO_DEVUELTO,
+                "idPrestamo=" + idPrestamo + " idLibro=" + idLibro + " filas=" + filas);
+    }
+
+    private Map<String, Object> parseData(EventGridEvent event) {
+        if (event.getData() == null) {
+            return Map.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(event.getData().toBytes(), new TypeReference<>() {
+            });
+        } catch (Exception ex) {
+            return Map.of("rawData", event.getData().toString());
+        }
+    }
+
+    private String stringOrNull(Object value) {
+        if (value == null) return null;
+        String text = value.toString();
+        return text.isBlank() ? null : text;
     }
 }

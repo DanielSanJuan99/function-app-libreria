@@ -321,4 +321,72 @@ public final class OracleStore {
     public static List<Notificacion> getNotificacionesByUsuario(String idUsuario) {
         return NotificacionRepository.getNotificacionesByUsuario(idUsuario);
     }
+
+    // =================================================================
+    // Soporte event-driven (Sumativa 3 / Sem 9)
+    // =================================================================
+
+    /**
+     * Decrementa en 1 las copias disponibles del libro (consumer Prestamo.Creado).
+     * @param idLibro identificador del libro
+     * @return {@code int} filas afectadas (1 si OK, 0 si stock=0 o libro no existe)
+     */
+    public static int decrementarCopiasDisponibles(String idLibro) {
+        return LibroRepository.decrementarCopiasDisponibles(idLibro);
+    }
+
+    /**
+     * Incrementa en 1 las copias disponibles del libro (consumer Prestamo.Devuelto / cascade Usuario.Eliminado).
+     * @param idLibro identificador del libro
+     * @return {@code int} filas afectadas
+     */
+    public static int incrementarCopiasDisponibles(String idLibro) {
+        return LibroRepository.incrementarCopiasDisponibles(idLibro);
+    }
+
+    /**
+     * Verifica si el libro tiene COPIAS_DISPONIBLE > 0 (validacion sincrona pre-prestamo).
+     * @param idLibro identificador del libro
+     * @return {@code true} si hay copias disponibles
+     */
+    public static boolean hayCopiasDisponibles(String idLibro) {
+        return LibroRepository.hayCopiasDisponibles(idLibro);
+    }
+
+    /**
+     * Lista los prestamos asociados a un usuario (para snapshot pre-cascada).
+     * @param idUsuario identificador del usuario
+     * @return lista de prestamos del usuario
+     */
+    public static List<Prestamo> getPrestamosByUsuario(String idUsuario) {
+        return PrestamoRepository.getPrestamosByUsuario(idUsuario);
+    }
+
+    /**
+     * Marca un prestamo como CANCELADO y lo elimina (cascade por baja de usuario).
+     * @param idPrestamo identificador del prestamo
+     * @return {@code int} filas eliminadas
+     */
+    public static int cancelarYBorrarPrestamo(String idPrestamo) {
+        return PrestamoRepository.cancelarYBorrarPrestamo(idPrestamo);
+    }
+
+    /**
+     * Verifica si el evento de Event Grid ya fue procesado (idempotencia).
+     * @param eventId event.id de Event Grid
+     * @return {@code true} si ya hay registro previo
+     */
+    public static boolean isEventoProcesado(String eventId) {
+        return EventoProcesadoRepository.isProcesado(eventId);
+    }
+
+    /**
+     * Marca un evento como procesado (insert idempotente en EVENTO_PROCESADO).
+     * @param eventId event.id de Event Grid
+     * @param eventType tipo del evento
+     * @param detalle texto libre con detalles del procesamiento
+     */
+    public static void marcarEventoProcesado(String eventId, String eventType, String detalle) {
+        EventoProcesadoRepository.marcarProcesado(eventId, eventType, detalle);
+    }
 }

@@ -111,6 +111,7 @@ final class RepositoryUtils {
         return switch (estado.trim().toUpperCase(Locale.ROOT)) {
             case "DEVUELTO" -> 2;
             case "ATRASADO" -> 3;
+            case "CANCELADO" -> 4;
             default -> 1;
         };
     }

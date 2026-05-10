@@ -221,6 +221,86 @@ final class LibroRepository {
     }
 
     /**
+     * Decrementa en 1 las copias disponibles del libro de forma atomica.
+     * Solo decrementa si COPIAS_DISPONIBLE > 0 (guard contra negativos).
+     * @param idLibro identificador del libro
+     * @return {@code int} filas afectadas (0 = stock agotado o libro inexistente, 1 = OK)
+     */
+    static int decrementarCopiasDisponibles(String idLibro) {
+        Long idNum = RepositoryUtils.parseLong(idLibro);
+        if (idNum == null) {
+            return 0;
+        }
+
+        String sql = """
+                UPDATE LIBRO
+                   SET COPIAS_DISPONIBLE = COPIAS_DISPONIBLE - 1
+                 WHERE ID_LIBRO = ?
+                   AND COPIAS_DISPONIBLE > 0
+                """;
+
+        try (Connection cn = OracleInfra.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+
+            ps.setLong(1, idNum);
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            throw RepositoryExceptionHandler.sqlException("Error decrementando copias disponibles", e);
+        }
+    }
+
+    /**
+     * Incrementa en 1 las copias disponibles del libro, sin exceder COPIAS_TOTALES.
+     * @param idLibro identificador del libro
+     * @return {@code int} filas afectadas
+     */
+    static int incrementarCopiasDisponibles(String idLibro) {
+        Long idNum = RepositoryUtils.parseLong(idLibro);
+        if (idNum == null) {
+            return 0;
+        }
+
+        String sql = """
+                UPDATE LIBRO
+                   SET COPIAS_DISPONIBLE = COPIAS_DISPONIBLE + 1
+                 WHERE ID_LIBRO = ?
+                   AND COPIAS_DISPONIBLE < COPIAS_TOTALES
+                """;
+
+        try (Connection cn = OracleInfra.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+
+            ps.setLong(1, idNum);
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            throw RepositoryExceptionHandler.sqlException("Error incrementando copias disponibles", e);
+        }
+    }
+
+    /**
+     * Verifica si quedan copias disponibles para un libro.
+     * @param idLibro identificador del libro
+     * @return {@code true} si COPIAS_DISPONIBLE > 0
+     */
+    static boolean hayCopiasDisponibles(String idLibro) {
+        Long idNum = RepositoryUtils.parseLong(idLibro);
+        if (idNum == null) {
+            return false;
+        }
+        String sql = "SELECT COPIAS_DISPONIBLE FROM LIBRO WHERE ID_LIBRO = ?";
+        try (Connection cn = OracleInfra.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setLong(1, idNum);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return false;
+                return rs.getInt(1) > 0;
+            }
+        } catch (SQLException e) {
+            throw RepositoryExceptionHandler.sqlException("Error consultando copias disponibles", e);
+        }
+    }
+
+    /**
      * Verifica duplicidad de libro por ISBN y título.
      * @param isbn ISBN del libro
      * @param titulo título del libro

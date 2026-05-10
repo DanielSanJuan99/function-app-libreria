@@ -1,6 +1,6 @@
 # function-app-libreria
 
-Function App Java para gestión de biblioteca, con 10 funciones HTTP / GraphQL / Event Grid:
+Function App Java para gestión de biblioteca, con 12 funciones HTTP / GraphQL / Event Grid:
 
 - `usuarios`
 - `libros`
@@ -11,6 +11,8 @@ Function App Java para gestión de biblioteca, con 10 funciones HTTP / GraphQL /
 - `graphql/catalogo`
 - `graphql/general`
 - `notificacionConsumer` *(Event Grid Trigger)*
+- `prestamosStockConsumer` *(Event Grid Trigger)*
+- `usuarioEliminadoConsumer` *(Event Grid Trigger)*
 - `notificaciones`
 
 El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando wallet y variables de entorno.
@@ -22,8 +24,9 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 - Azure Functions HTTP en Java 21.
 - Consultas REST de resumen para catálogo y estado general.
 - Endpoints GraphQL formales con `graphql-java`.
-- **Consumer Event Grid (`@EventGridTrigger`) que materializa notificaciones de dominio.**
+- **Consumers Event Grid (`@EventGridTrigger`) para notificaciones, ajuste de stock por préstamo y baja de usuario en cascada.**
 - **Endpoint REST de consulta de notificaciones (lista global y por usuario).**
+- **Idempotencia de eventos vía tabla `EVENTO_PROCESADO` (cada `eventId` se procesa una sola vez).**
 - Persistencia Oracle con repositorios separados por entidad.
 - Refactor de `OracleStore` como fachada para mantener compatibilidad.
 - Documentación JavaDoc en métodos clave.
@@ -37,26 +40,31 @@ El proyecto se conecta a una **Base de Datos Autónoma de Oracle Cloud** usando 
 	- handlers HTTP (`UsuariosFunction`, `LibrosFunction`, `AutoresFunction`, `PrestamosFunction`),
 	- handlers REST de resumen (`ResumenCatalogoFunction`, `ResumenGeneralFunction`),
 	- handlers GraphQL (`CatalogoGraphqlFunction`, `ResumenGeneralGraphqlFunction`),
-	- consumer Event Grid (`NotificacionConsumerFunction`),
+	- consumers Event Grid: `NotificacionConsumerFunction`, `prestamosStockConsumer` (en `PrestamosFunction`), `usuarioEliminadoConsumer` (en `UsuariosFunction`),
 	- handler HTTP de consulta de notificaciones (`NotificacionesFunction`).
 - `src/main/java/cl/duoc/biblioteca/functions/domain/`
 	- entidades de dominio (`Notificacion`, ...).
 - `src/main/java/cl/duoc/biblioteca/functions/repository/`
-	- acceso a datos (`UsuarioRepository`, `LibroRepository`, `AutorRepository`, `PrestamoRepository`, `NotificacionRepository`),
+	- acceso a datos (`UsuarioRepository`, `LibroRepository`, `AutorRepository`, `PrestamoRepository`, `NotificacionRepository`, `EventoProcesadoRepository`),
 	- infraestructura Oracle (`OracleInfra`),
 	- utilidades (`RepositoryUtils`),
 	- fachada (`OracleStore`).
 - `src/main/java/cl/duoc/biblioteca/functions/exception/`
 	- traducción de errores SQL (`RepositoryExceptionHandler`).
+- `src/main/resources/db/`
+	- script SQL del esquema completo (`bd_libreria.sql`).
 
 ---
 
 ## Function App en Azure
 
 - **Nombre de Function App de despliegue:** `functionsbiblioteca`
-- **Funciones desplegadas:** `usuarios`, `libros`, `autores`, `prestamos`, `resumen/catalogo`, `resumen/general`, `graphql/catalogo`, `graphql/general`, `notificacionConsumer` *(EventGrid)*, `notificaciones`
-- **Topic Event Grid asociado al consumer:** `biblioteca-topics`
-- **Event Subscription:** apunta al recurso `functionsbiblioteca` → función `notificacionConsumer`
+- **Funciones desplegadas:** `usuarios`, `libros`, `autores`, `prestamos`, `resumen/catalogo`, `resumen/general`, `graphql/catalogo`, `graphql/general`, `notificacionConsumer` *(EventGrid)*, `prestamosStockConsumer` *(EventGrid)*, `usuarioEliminadoConsumer` *(EventGrid)*, `notificaciones`
+- **Topic Event Grid asociado a los consumers:** `biblioteca-topics`
+- **Event Subscriptions** (una por consumer):
+	- `duoc-subscripcion-cn2-libreria` → `notificacionConsumer`
+	- `sub-prestamos-stock` → `prestamosStockConsumer`
+	- `sub-usuario-eliminado` → `usuarioEliminadoConsumer`
 
 > Nota: En `pom.xml` existe `functionAppName=biblioteca-function-app` para el empaquetado local.
 > Si vas a desplegar con `mvn azure-functions:deploy`, ajusta ese nombre al recurso real (`functionsbiblioteca`) o despliega desde la extensión de VS Code seleccionando el recurso correcto.
@@ -175,13 +183,13 @@ Base URL en Azure (ejemplo):
 
 ## 1) `usuarios`
 
-Gestiona usuarios y su estado (activo/inactivo según préstamos).
+Gestiona usuarios. La eliminación se procesa en **cascada vía evento**.
 
 - `GET /usuarios` → lista usuarios
 - `GET /usuarios/{id}` → detalle por ID
 - `POST /usuarios` → crea usuario
 - `PUT /usuarios/{id}` → actualiza usuario
-- `DELETE /usuarios/{id}` → elimina o marca inactivo si tiene préstamos activos
+- `DELETE /usuarios/{id}` → responde **202** con snapshot del usuario y sus préstamos. La cascada (devolver copias al stock, cancelar y borrar préstamos, eliminar al usuario, registrar auditoría) la ejecuta `usuarioEliminadoConsumer` al recibir `Usuario.EliminacionSolicitada`.
 
 Ejemplo `POST`:
 
@@ -238,11 +246,11 @@ Ejemplo `POST`:
 
 ## 4) `prestamos`
 
-Gestiona préstamos entre usuarios y libros.
+Gestiona préstamos entre usuarios y libros. El ajuste de inventario se hace **vía evento** (`prestamosStockConsumer`).
 
 - `GET /prestamos`
 - `GET /prestamos/{id}`
-- `POST /prestamos`
+- `POST /prestamos` → valida stock; responde **409** si no hay copias disponibles del libro
 - `PUT /prestamos/{id}`
 - `DELETE /prestamos/{id}`
 
@@ -262,11 +270,11 @@ Ejemplo `POST`:
 
 Función con `@EventGridTrigger` que **consume** los eventos de dominio publicados al **Event Grid Topic** `biblioteca-topics` y persiste un registro en la tabla `NOTIFICACIONES` por cada uno.
 
-- **No es invocable por HTTP.** Se gatilla automáticamente por la Event Subscription configurada en Azure Portal.
+- **No es invocable por HTTP.** Se gatilla automáticamente por la Event Subscription `duoc-subscripcion-cn2-libreria`.
 - **Eventos que procesa (switch por `eventType`):**
 	- `Prestamo.Creado`
 	- `Prestamo.Devuelto`
-	- `Usuario.Inactivo`
+	- `Usuario.EliminacionSolicitada`
 - **Salida:** un `Notificacion` con `tipo`, `asunto`, `cuerpo`, `estado=PENDIENTE`, `fechaCreacion=now`, `fechaEnvio=null`.
 
 Para verificar el flujo manualmente, basta con publicar un evento desde el publisher (`event-rounting-libreria/eventPublisher`) o desde el BFF (que ya orquesta la publicación).
@@ -297,9 +305,28 @@ Respuesta de ejemplo:
 
 > El campo `fechaEnvio` se mantiene `null` en este alcance — queda reservado para una futura etapa de despacho real (mailer/SMS) que marque la notificación como enviada.
 
+## 7) `prestamosStockConsumer` *(Event Grid Trigger)*
+
+Función `@EventGridTrigger` declarada dentro de `PrestamosFunction`. Ajusta el inventario del libro según el ciclo de vida del préstamo.
+
+- **No es invocable por HTTP.** Se gatilla por la Event Subscription `sub-prestamos-stock`.
+- **Eventos que procesa:**
+	- `Prestamo.Creado` → `COPIAS_DISPONIBLE -= 1` en `LIBRO`
+	- `Prestamo.Devuelto` → `COPIAS_DISPONIBLE += 1` en `LIBRO`
+- **Idempotente:** registra cada `eventId` en la tabla `EVENTO_PROCESADO` para no duplicar el ajuste si Event Grid reentrega el mismo evento.
+
+## 8) `usuarioEliminadoConsumer` *(Event Grid Trigger)*
+
+Función `@EventGridTrigger` declarada dentro de `UsuariosFunction`. Procesa la baja de un usuario en cascada.
+
+- **No es invocable por HTTP.** Se gatilla por la Event Subscription `sub-usuario-eliminado`.
+- **Evento que procesa:** `Usuario.EliminacionSolicitada`.
+- **Cascada:** por cada préstamo del usuario incrementa `COPIAS_DISPONIBLE` del libro, marca el préstamo como `CANCELADO` y lo elimina (en transacción), elimina físicamente al usuario y registra una notificación de auditoría `USUARIO_ELIMINADO`.
+- **Idempotente:** registra el `eventId` en `EVENTO_PROCESADO`.
+
 ---
 
-## Flujo event-driven (Notificaciones)
+## Flujo event-driven
 
 ```
 [BFF / cliente HTTP]
@@ -307,27 +334,29 @@ Respuesta de ejemplo:
 [event-rounting-libreria → eventPublisher]
 		↓ sendEvent()
 [Event Grid Topic: biblioteca-topics]
-		↓ entrega async
-[Event Subscription → notificacionConsumer]
-		↓ NotificacionRepository.saveNotificacion()
-[Tabla NOTIFICACIONES en Oracle ATP]
-		↑ consultable vía
-[GET /api/notificaciones]
+		↓ entrega async (fan-out a 3 subscriptions)
+		├─→ duoc-subscripcion-cn2-libreria → notificacionConsumer       → tabla NOTIFICACION
+		├─→ sub-prestamos-stock           → prestamosStockConsumer     → ajusta COPIAS_DISPONIBLE en LIBRO
+		└─→ sub-usuario-eliminado         → usuarioEliminadoConsumer   → cascada (LIBRO + PRESTAMO + USUARIO + NOTIFICACION)
+
+[GET /api/notificaciones] consulta las notificaciones generadas
 ```
 
 ### Pre-requisito SQL
 
-Antes de procesar eventos, debe existir la tabla `NOTIFICACIONES` en Oracle ATP. El DDL está en `db/notificaciones.sql`.
+Antes de levantar la Function App debe existir el esquema completo en Oracle ATP. El DDL/DML está en `src/main/resources/db/bd_libreria.sql` e incluye, entre otras, la tabla `NOTIFICACION` (consumer de notificaciones) y la tabla `EVENTO_PROCESADO` (idempotencia de eventos).
 
-### Configuración del consumer en Azure
+### Configuración de consumers en Azure
 
-`notificacionConsumer` no requiere variables de entorno adicionales: el binding `@EventGridTrigger` se conecta automáticamente a la Event Subscription configurada en el portal.
+Los consumers no requieren variables de entorno adicionales: el binding `@EventGridTrigger` se conecta automáticamente a su Event Subscription.
 
-Pasos para crear la Event Subscription (una sola vez):
+Pasos para crear las Event Subscriptions (una vez por consumer):
 1. Azure Portal → Event Grid Topic `biblioteca-topics` → **+ Event Subscription**
 2. **Endpoint Type:** Azure Function
-3. **Endpoint:** Subscription → `rg_functions_bliblioteca` → Function App `functionsbiblioteca` → función `notificacionConsumer`
-4. (Opcional) Filtrar por **Event Types**: `Prestamo.Creado`, `Prestamo.Devuelto`, `Usuario.Inactivo`
+3. **Endpoint:** Function App `functionsbiblioteca` → consumer correspondiente:
+	- `duoc-subscripcion-cn2-libreria` → `notificacionConsumer` *(filtro: `Prestamo.Creado`, `Prestamo.Devuelto`, `Usuario.EliminacionSolicitada`)*
+	- `sub-prestamos-stock` → `prestamosStockConsumer` *(filtro: `Prestamo.Creado`, `Prestamo.Devuelto`)*
+	- `sub-usuario-eliminado` → `usuarioEliminadoConsumer` *(filtro: `Usuario.EliminacionSolicitada`)*
 
 ---
 
