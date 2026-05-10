@@ -243,6 +243,83 @@ final class PrestamoRepository {
     }
 
     /**
+     * Lista los prestamos de un usuario.
+     * @param idUsuario identificador del usuario
+     * @return {@link List} de {@link Prestamo} del usuario
+     */
+    static List<Prestamo> getPrestamosByUsuario(String idUsuario) {
+        Long idNum = RepositoryUtils.parseLong(idUsuario);
+        if (idNum == null) {
+            return java.util.Collections.emptyList();
+        }
+        String sql = """
+                SELECT p.ID_PRESTAMO, p.ID_USUARIO, p.LIBRO_ID_LIBRO,
+                       p.FECHA_PRESTAMO, p.FECHA_DEVOLUCION_ESPERADA, te.NOMBRE_ESTADO
+                FROM PRESTAMO p
+                JOIN TIPO_ESTADO te ON te.ID_ESTADO = p.ID_ESTADO
+                WHERE p.ID_USUARIO = ?
+                ORDER BY p.ID_PRESTAMO
+                """;
+        try (Connection cn = OracleInfra.getConnection();
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setLong(1, idNum);
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.ArrayList<Prestamo> result = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    result.add(new Prestamo(
+                            String.valueOf(rs.getLong("ID_PRESTAMO")),
+                            String.valueOf(rs.getLong("ID_USUARIO")),
+                            String.valueOf(rs.getLong("LIBRO_ID_LIBRO")),
+                            RepositoryUtils.formatDate(rs.getDate("FECHA_PRESTAMO")),
+                            RepositoryUtils.formatDate(rs.getDate("FECHA_DEVOLUCION_ESPERADA")),
+                            rs.getString("NOMBRE_ESTADO")
+                    ));
+                }
+                return result;
+            }
+        } catch (SQLException e) {
+            throw RepositoryExceptionHandler.sqlException("Error consultando prestamos por usuario", e);
+        }
+    }
+
+    /**
+     * Marca un prestamo como CANCELADO (id_estado = 4) y luego lo elimina.
+     * Se usa en la cascada por baja de usuario para dejar trazabilidad
+     * en BD antes del DELETE fisico (auditable via flashback / triggers).
+     * @param idPrestamo identificador del prestamo
+     * @return {@code int} 1 si se cancelo+borro, 0 si no existia
+     */
+    static int cancelarYBorrarPrestamo(String idPrestamo) {
+        Long idNum = RepositoryUtils.parseLong(idPrestamo);
+        if (idNum == null) {
+            return 0;
+        }
+        try (Connection cn = OracleInfra.getConnection()) {
+            cn.setAutoCommit(false);
+            try (PreparedStatement upd = cn.prepareStatement(
+                    "UPDATE PRESTAMO SET ID_ESTADO = 4 WHERE ID_PRESTAMO = ?");
+                 PreparedStatement del = cn.prepareStatement(
+                    "DELETE FROM PRESTAMO WHERE ID_PRESTAMO = ?")) {
+                upd.setLong(1, idNum);
+                int marked = upd.executeUpdate();
+                if (marked == 0) {
+                    cn.rollback();
+                    return 0;
+                }
+                del.setLong(1, idNum);
+                int deleted = del.executeUpdate();
+                cn.commit();
+                return deleted;
+            } catch (SQLException ex) {
+                cn.rollback();
+                throw ex;
+            }
+        } catch (SQLException e) {
+            throw RepositoryExceptionHandler.sqlException("Error cancelando y borrando prestamo", e);
+        }
+    }
+
+    /**
      * Verifica duplicidad de préstamo por usuario y libro.
      * @param idUsuario identificador del usuario
      * @param idLibro identificador del libro
